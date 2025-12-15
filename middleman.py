@@ -5,7 +5,9 @@ import asyncio
 import os
 import random
 import re
+import subprocess
 import sys
+import time
 import urllib.request
 import urllib.parse
 from glob import glob
@@ -972,10 +974,55 @@ async def check_cdp() -> bool:
         return False
 
 
+async def launch_local_chromium() -> bool:
+    try:
+        print(f"{ARROW} Launching local Chromium container...")
+        cmd = [
+            "podman",
+            "run",
+            "-d",
+            "--rm",
+            "--network=host",
+            "-p",
+            "3001:3001",
+            "-p",
+            "9222:9222",
+            "ghcr.io/remotebrowser/chromium-live",
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        container_id = result.stdout.strip()
+        print(f"{CHECK} Container started: {container_id}")
+
+        print(f"{ARROW} Checking CDP availability...")
+        time.sleep(3)
+        for attempt in range(10):
+            if await check_cdp():
+                print(f"{CHECK} Local Chromium CDP is ready")
+                return True
+
+            if attempt == 9:
+                print(f"{CROSS} Failed to connect to CDP after container launch")
+                return False
+
+            time.sleep(2)
+
+        return False
+
+    except subprocess.CalledProcessError as e:
+        print(f"{CROSS} Failed to launch container: {e}")
+        return False
+    except Exception as e:
+        print(f"{CROSS} Error launching Chromium: {e}")
+        return False
+
+
 if __name__ == "__main__":
     if asyncio.run(check_cdp()) is False:
-        print("Fatal error: Unable to detect remote Chrome with CDP!")
-        sys.exit(-1)
+        print(f"{CROSS} No existing CDP found")
+        if asyncio.run(launch_local_chromium()) is False:
+            print("Fatal error: Unable to detect or launch Chrome with CDP!")
+            sys.exit(-1)
 
     result = asyncio.run(main())
     if result == "server":
