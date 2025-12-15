@@ -17,7 +17,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - run: docker run --name cdp -p 9222:9222 -d ghcr.io/mcp-getgather/chromium-live
+      - run: docker run --name cdp -p 9222:9222 -d ghcr.io/remotebrowser/chromium-live
         timeout-minutes: 3
 
       - name: Wait for Chrome CDP to be ready
