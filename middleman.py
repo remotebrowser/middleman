@@ -1020,7 +1020,7 @@ if __name__ == "__main__":
     if asyncio.run(check_cdp()) is False:
         print(f"{CROSS} No existing CDP found")
         if asyncio.run(launch_local_chromium()) is False:
-            print("Fatal error: Unable to detect or launch Chrome with CDP!")
+            print("Fatal error: Unable to launch containerized Chromium!")
             sys.exit(-1)
 
     result = asyncio.run(main())
