@@ -7,7 +7,6 @@ import random
 import re
 import subprocess
 import sys
-import time
 import urllib.request
 import urllib.parse
 from glob import glob
@@ -995,7 +994,7 @@ async def launch_local_chromium() -> bool:
         print(f"{CHECK} Container started: {container_id}")
 
         print(f"{ARROW} Checking CDP availability...")
-        time.sleep(3)
+        await asyncio.sleep(3)
         for attempt in range(10):
             if await check_cdp():
                 print(f"{CHECK} Local Chromium CDP is ready")
@@ -1005,7 +1004,7 @@ async def launch_local_chromium() -> bool:
                 print(f"{CROSS} Failed to connect to CDP after container launch")
                 return False
 
-            time.sleep(2)
+            await asyncio.sleep(2)
 
         return False
 
