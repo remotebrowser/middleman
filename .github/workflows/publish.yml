@@ -20,7 +20,17 @@ jobs:
 
       - run: docker build -t middleman .
 
-      - run: docker run -p 3000:3000 --name middleman -d middleman
+      - run: docker network create middleman-net
+        timeout-minutes: 1
+
+      - run: docker run --name cdp --network middleman-net -p 9222:9222 -d ghcr.io/remotebrowser/chromium-live
+        timeout-minutes: 3
+
+      - name: Wait for Chrome CDP to be ready
+        run: while ! curl -s 'http://127.0.0.1:9222/json/version' | grep -q 'Chrome'; do sleep 1; done
+        timeout-minutes: 2
+
+      - run: docker run -p 3000:3000 --name middleman --network middleman-net --env CDP_URL=http://$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' cdp):9222 -d middleman
         timeout-minutes: 3
 
       - name: Run the health check validation
