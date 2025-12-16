@@ -4,7 +4,7 @@
 
 First, run a containerized Chromium with active CDP (Chrome DevTools Protocol):
 ```bash
-podman run -p 3001:3001 -p 9222:9222 ghcr.io/mcp-getgather/chromium-live
+podman run -p 3001:3001 -p 9222:9222 ghcr.io/remotebrowser/chromium-live
 ```
 
 Open `localhost:3001` to view the containerized desktop live.
