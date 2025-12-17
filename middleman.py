@@ -973,11 +973,106 @@ async def check_cdp() -> bool:
         return False
 
 
+def run_podman(args: list) -> subprocess.CompletedProcess:
+    cmd = ["podman"]
+    if os.environ.get("CONTAINER_HOST"):
+        cmd.append("--remote")
+    cmd.extend(args)
+    return subprocess.run(cmd, capture_output=True, text=True, check=True, encoding="utf-8", errors="replace")
+
+
+async def setup_tailscale(container_id, name) -> str | None:
+    try:
+        print(f"{ARROW} Setting up Tailscale in container {container_id}...")
+
+        TAILSCALE_IP_CMD = "sudo tailscale ip"
+        tailscale_commands = [
+            "curl -fsSL https://tailscale.com/install.sh | sudo sh",
+            "sudo nohup tailscaled > /dev/null 2>&1 &",
+            f"sudo tailscale up --auth-key={os.getenv('TS_AUTHKEY')} --hostname={name}",
+            TAILSCALE_IP_CMD,
+        ]
+
+        ip_address = None
+        for i, cmd in enumerate(tailscale_commands, 1):
+            print(f"{ARROW} Executing Tailscale setup: Step {i}/{len(tailscale_commands)}")
+            await asyncio.sleep(1)
+            result = run_podman(["exec", container_id, "sh", "-c", cmd])
+            if result.returncode == 0:
+                if cmd == TAILSCALE_IP_CMD and result.stdout:
+                    ip_address = result.stdout.strip().split("\n")[0]
+            else:
+                print(f"{CROSS} Failed to execute Tailscale setup step {i}: {result.stderr}")
+                return None
+
+        if ip_address:
+            print(f"{CHECK} All Tailscale setup steps completed successfully")
+            print(f"{CHECK} Tailscale IP address: {ip_address}")
+            return ip_address
+        else:
+            print(f"{CROSS} Failed to get IP address from Tailscale")
+            return None
+
+    except Exception as e:
+        print(f"{CROSS} Error setting up Tailscale: {e}")
+        return None
+
+
+async def launch_tailscaled_chromium() -> bool:
+    global CDP_URL
+    try:
+        print(f"{ARROW} Launching local Chromium container with Tailscale...")
+        name = f"chromium-{nanoid.generate(FRIENDLY_CHARS, 5)}"
+        cmd = [
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            name,
+            "--cap-add=NET_ADMIN",
+            "--cap-add=NET_RAW",
+            "--device",
+            "/dev/net/tun:/dev/net/tun",
+            "ghcr.io/remotebrowser/chromium-live",
+        ]
+        result = run_podman(cmd)
+        container_id = result.stdout.strip()
+        print(f"{CHECK} Container started: name={name} id={container_id}")
+
+        await asyncio.sleep(3)
+        ip_address = await setup_tailscale(container_id, name)
+        if ip_address is None:
+            return False
+
+        CDP_URL = f"http://{ip_address}:9222"
+        print(f"{CHECK} Set CDP_URL to {CDP_URL}")
+        print(f"{ARROW} Checking CDP availability...")
+        await asyncio.sleep(3)
+        for attempt in range(10):
+            if await check_cdp():
+                print(f"{CHECK} Local Chromium CDP is ready")
+                return True
+
+            if attempt == 9:
+                print(f"{CROSS} Failed to connect to CDP after container launch")
+                return False
+
+            await asyncio.sleep(2)
+
+        return False
+
+    except subprocess.CalledProcessError as e:
+        print(f"{CROSS} Failed to launch container: {e}")
+        return False
+    except Exception as e:
+        print(f"{CROSS} Error launching Chromium: {e}")
+        return False
+
+
 async def launch_local_chromium() -> bool:
     try:
         print(f"{ARROW} Launching local Chromium container...")
         cmd = [
-            "podman",
             "run",
             "-d",
             "--rm",
@@ -989,7 +1084,7 @@ async def launch_local_chromium() -> bool:
             "ghcr.io/remotebrowser/chromium-live",
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        result = run_podman(cmd)
         container_id = result.stdout.strip()
         print(f"{CHECK} Container started: {container_id}")
 
@@ -1019,7 +1114,11 @@ async def launch_local_chromium() -> bool:
 if __name__ == "__main__":
     if asyncio.run(check_cdp()) is False:
         print(f"{CROSS} No existing CDP found")
-        if asyncio.run(launch_local_chromium()) is False:
+        if os.getenv("TS_AUTHKEY"):
+            if asyncio.run(launch_tailscaled_chromium()) is False:
+                print("Fatal error: Unable to detect or launch Chromium with Tailscale!")
+                # sys.exit(-1)
+        elif asyncio.run(launch_local_chromium()) is False:
             print("Fatal error: Unable to launch containerized Chromium!")
             sys.exit(-1)
 
