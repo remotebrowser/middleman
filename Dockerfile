@@ -5,6 +5,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.8.4 /uv /uvx /bin/
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
+    sudo \
+    podman \
     chromium \
     tigervnc-standalone-server \
     libnss3 \
