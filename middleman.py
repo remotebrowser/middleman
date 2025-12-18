@@ -1117,7 +1117,7 @@ if __name__ == "__main__":
         if os.getenv("TS_AUTHKEY"):
             if asyncio.run(launch_tailscaled_chromium()) is False:
                 print("Fatal error: Unable to detect or launch Chromium with Tailscale!")
-                # sys.exit(-1)
+                print("Middleman will not work properly.")
         elif asyncio.run(launch_local_chromium()) is False:
             print("Fatal error: Unable to launch containerized Chromium!")
             sys.exit(-1)
