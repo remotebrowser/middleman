@@ -17,3 +17,5 @@ uv run middleman.py
 Open `localhost:3000` and pick one of the examples.
 
 See also [DEVELOPMENT.md](DEVELOPMENT.md).
+
+For deployment instructions via Dokku, see the [deployment guide](deploy-dokku.md).
