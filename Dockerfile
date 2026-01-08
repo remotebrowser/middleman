@@ -2,28 +2,7 @@ FROM mirror.gcr.io/library/python:3.13-slim-bookworm
 
 COPY --from=ghcr.io/astral-sh/uv:0.8.4 /uv /uvx /bin/
 
-RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    sudo \
-    podman \
-    chromium \
-    tigervnc-standalone-server \
-    libnss3 \
-    libatk-bridge2.0-0 \
-    libgtk-3-0 \
-    libxss1 \
-    libasound2 \
-    libgbm1 \
-    libxshmfence1 \
-    fonts-liberation \
-    libu2f-udev \
-    libvulkan1 \
-    dbus-x11 \
-    jwm \
-    x11-apps \
-    xterm \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y && apt-get install -y --no-install-recommends chromium
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONFAULTHANDLER=1
@@ -38,8 +17,6 @@ RUN uv sync --no-dev --no-install-workspace
 
 COPY middleman.py /app/middleman.py
 COPY patterns /app/patterns/
-COPY entrypoint.sh /app/entrypoint.sh
-COPY .jwmrc /app/.jwmrc
 
 RUN uv sync --no-dev
 
@@ -54,4 +31,4 @@ RUN useradd -m -s /bin/bash middleman && \
 
 USER middleman
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["python", "/app/middleman.py"]
