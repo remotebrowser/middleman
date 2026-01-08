@@ -1,0 +1,28 @@
+app = 'middleman'
+primary_region = 'sjc'
+
+[build]
+  dockerfile = './Dockerfile'
+
+[env]
+  PORT = '3000'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "25s"
+    timeout  = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  memory = '2048mb'
+  cpu_kind = 'shared'
+  cpus = 2
