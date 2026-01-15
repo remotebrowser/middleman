@@ -2,28 +2,25 @@
 
 import argparse
 import asyncio
+import json
 import os
 import random
 import re
-
 import sys
-import urllib.request
-import urllib.parse
 import urllib.error
-from glob import glob
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
+from glob import glob
 
+import nanoid
+import pwinput
+import uvicorn
+import zendriver as zd
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-import json
-import nanoid
-
-import pwinput
-import uvicorn
-
-import zendriver as zd
 
 CDP_URL = os.getenv("CDP_URL", "http://127.0.0.1:9222")
 CHROMEFLEET_URL = os.getenv("CHROMEFLEET_URL")
@@ -106,7 +103,11 @@ async def init(location: str = "", hostname: str = "") -> tuple[str, str, zd.Bro
     from urllib.parse import urlparse
 
     cdp = urlparse(CDP_URL)
-    browser = await zd.Browser.create(host=cdp.hostname, port=cdp.port)
+    assert cdp.hostname is not None
+    # add '[' and ']' for ipv6 address
+    cdp_hostname = f"[{cdp.hostname}]" if ":" in cdp.hostname else cdp.hostname
+
+    browser = await zd.Browser.create(host=cdp_hostname, port=cdp.port)
     page = await browser.get("about:blank", new_tab=True)
     browsers.append(Handle(id=id, hostname=hostname, browser=browser, page=page))
 
@@ -965,7 +966,7 @@ async def check_cdp() -> bool:
     try:
         print(f"{ARROW} Checking for remote Chrome with CDP at {CYAN}{CDP_URL}{NORMAL}...")
         cdp = urllib.parse.urlparse(CDP_URL)
-        with urllib.request.urlopen(f"{cdp.scheme}://{cdp.hostname}:{cdp.port}/json") as response:
+        with urllib.request.urlopen(f"{cdp.scheme}://{cdp.netloc}/json") as response:
             data = json.loads(response.read().decode())
             result = isinstance(data, list) and len(data) > 0
             if result:
@@ -997,12 +998,13 @@ async def launch_chromefleet_machine() -> bool:
 
             print(f"{ARROW} Checking CDP availability...")
             await asyncio.sleep(3)
-            for attempt in range(10):
+            num_attempts = 20
+            for attempt in range(num_attempts):
                 if await check_cdp():
                     print(f"{CHECK} Chrome Fleet Chromium CDP is ready")
                     return True
 
-                if attempt == 9:
+                if attempt == num_attempts - 1:
                     print(f"{CROSS} Failed to connect to CDP after Chrome Fleet launch")
                     return False
 
