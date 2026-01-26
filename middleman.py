@@ -83,20 +83,6 @@ class Handle:
     page: zd.Tab
 
 
-def collect(filename: str) -> list[str]:
-    try:
-        with open(filename, "r", encoding="utf-8") as f:
-            entries = [line.strip() for line in f if line.strip()]
-        print(f"{GREEN}{CHECK}{NORMAL} Loaded {MAGENTA}{len(entries)} entries{NORMAL} from {filename}")
-        return entries
-    except FileNotFoundError:
-        print(f"{YELLOW}Warning: {filename} not found, using empty list{NORMAL}")
-        return []
-    except Exception as e:
-        print(f"{RED}Error loading {filename}: {e}{NORMAL}")
-        return []
-
-
 async def init(location: str = "", hostname: str = "") -> tuple[str, str, zd.Browser, zd.Tab]:
     id = nanoid.generate(FRIENDLY_CHARS, 6)
 
@@ -111,18 +97,14 @@ async def init(location: str = "", hostname: str = "") -> tuple[str, str, zd.Bro
     page = await browser.get("about:blank", new_tab=True)
     browsers.append(Handle(id=id, hostname=hostname, browser=browser, page=page))
 
-    denylist = collect("denylist.txt")
-
     async def handle_request(event):
         resource_type = event.resource_type
         request_url = event.request.url
 
-        deny_type = resource_type in [
+        should_deny = resource_type in [
             zd.cdp.network.ResourceType.MEDIA,
             zd.cdp.network.ResourceType.FONT,
         ]
-        deny_url = any(domain in request_url for domain in denylist)
-        should_deny = deny_type or deny_url
 
         if not should_deny:
             await page.send(zd.cdp.fetch.continue_request(request_id=event.request_id))
