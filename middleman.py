@@ -965,15 +965,15 @@ async def check_cdp() -> bool:
         return False
 
 
-async def launch_chromefleet_machine() -> bool:
+async def launch_chromefleet_browser() -> bool:
     global CDP_URL
     try:
-        machine_id = nanoid.generate(FRIENDLY_CHARS, 5)
+        browser_id = nanoid.generate(FRIENDLY_CHARS, 5)
         print(f"{ARROW} Launching Chromium via Chrome Fleet API at {CYAN}{CHROMEFLEET_URL}{NORMAL}...")
-        print(f"{ARROW} Machine ID: {CYAN}{machine_id}{NORMAL}")
+        print(f"{ARROW} Browser ID: {CYAN}{browser_id}{NORMAL}")
 
-        request_url = f"{CHROMEFLEET_URL}/api/v1/start/{machine_id}"
-        request = urllib.request.Request(request_url, method="GET")
+        request_url = f"{CHROMEFLEET_URL}/api/v1/browsers/{browser_id}"
+        request = urllib.request.Request(request_url, method="POST")
 
         with urllib.request.urlopen(request) as response:
             data = json.loads(response.read().decode())
@@ -1013,8 +1013,8 @@ if __name__ == "__main__":
     if asyncio.run(check_cdp()) is False:
         print(f"{CROSS} No existing CDP found")
         if CHROMEFLEET_URL:
-            if asyncio.run(launch_chromefleet_machine()) is False:
-                print("Fatal error: Unable to launch a machine with Chrome Fleet!")
+            if asyncio.run(launch_chromefleet_browser()) is False:
+                print("Fatal error: Unable to launch a browser with Chrome Fleet!")
                 sys.exit(-1)
         else:
             print("Fatal error: CHROMEFLEET_URL is not set and no existing CDP found!")
