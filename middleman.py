@@ -638,7 +638,7 @@ async def home():
 
     signin_examples = [
         {"title": "BBC Saved Articles", "link": "/start?location=bbc.com/saved"},
-        {"title": "Goodreads Bookshelf", "link": "/start?location=goodreads.com/signin"},
+        {"title": "Goodreads Bookshelf", "link": "/start?location=goodreads.com/user/sign_in"},
         {"title": "Amazon Browsing History", "link": "/start?location=amazon.com/gp/history"},
         {"title": "Gofood Order History", "link": "/start?location=gofood.co.id/en/orders"},
         {"title": "eBird Life List", "link": "/start?location=ebird.org/lifelist"},
