@@ -13,7 +13,9 @@ import urllib.request
 from dataclasses import dataclass
 from glob import glob
 
+import asyncio_atexit
 import nanoid
+import websockets
 import pwinput
 import uvicorn
 import zendriver as zd
@@ -21,8 +23,13 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from zendriver.core.config import Config
+from zendriver.core.connection import Connection
+from zendriver.core import util
+from zendriver.core.browser import HTTPApi
+from zendriver.core._contradict import ContraDict
 
-CDP_URL = os.getenv("CDP_URL", "http://127.0.0.1:9222")
+CDP_WEBSOCKET_URL = os.getenv("CDP_WEBSOCKET_URL")
 CHROMEFLEET_URL = os.getenv("CHROMEFLEET_URL")
 
 MIDDLEMAN_DEBUG = os.getenv("MIDDLEMAN_DEBUG")
@@ -46,6 +53,47 @@ FRIENDLY_CHARS = "23456789abcdefghijkmnpqrstuvwxyz"
 
 async def pause():
     input("Press Enter to continue...")
+
+
+async def create_browser_from_cdp_websocket(websocket_url: str, config: Config | None = None) -> zd.Browser:
+    parsed = urllib.parse.urlparse(websocket_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 9222
+
+    if not config:
+        config = Config(host=host, port=port)
+
+    config.host = host
+    config.port = port
+
+    instance = zd.Browser(config)
+    instance._http = HTTPApi((host, port))
+
+    try:
+        instance.info = ContraDict(await instance._http.get("version"), silent=True)
+    except Exception:
+        instance.info = ContraDict({"webSocketDebuggerUrl": websocket_url}, silent=True)
+
+    instance.connection = Connection(websocket_url, _owner=instance)
+
+    if instance.config.autodiscover_targets:
+        instance.connection.handlers[zd.cdp.target.TargetInfoChanged] = [instance._handle_target_update]
+        instance.connection.handlers[zd.cdp.target.TargetCreated] = [instance._handle_target_update]
+        instance.connection.handlers[zd.cdp.target.TargetDestroyed] = [instance._handle_target_update]
+        instance.connection.handlers[zd.cdp.target.TargetCrashed] = [instance._handle_target_update]
+        await instance.connection.send(zd.cdp.target.set_discover_targets(discover=True))
+
+    await instance.update_targets()
+    util.get_registered_instances().add(instance)
+
+    async def browser_atexit() -> None:
+        if not instance.stopped:
+            await instance.stop()
+        await instance._cleanup_temporary_profile()
+
+    asyncio_atexit.register(browser_atexit)
+
+    return instance
 
 
 def get_selector(input_selector: str):
@@ -86,14 +134,10 @@ class Handle:
 async def init(location: str = "", hostname: str = "") -> tuple[str, str, zd.Browser, zd.Tab]:
     id = nanoid.generate(FRIENDLY_CHARS, 6)
 
-    from urllib.parse import urlparse
+    cdp_websocket_url = CDP_WEBSOCKET_URL
+    assert cdp_websocket_url is not None
 
-    cdp = urlparse(CDP_URL)
-    assert cdp.hostname is not None
-    # add '[' and ']' for ipv6 address
-    cdp_hostname = f"[{cdp.hostname}]" if ":" in cdp.hostname else cdp.hostname
-
-    browser = await zd.Browser.create(host=cdp_hostname, port=cdp.port)
+    browser = await create_browser_from_cdp_websocket(websocket_url=cdp_websocket_url)
     page = await browser.get("about:blank", new_tab=True)
     browsers.append(Handle(id=id, hostname=hostname, browser=browser, page=page))
 
@@ -950,23 +994,38 @@ async def main():
         parser.print_help()
 
 
-async def check_cdp() -> bool:
+async def get_cdp_websocket_url(cdp_url: str, num_attempts: int = 20) -> str | None:
+    """Get CDP websocket URL from CDP URL by polling /json/version endpoint"""
+    version_url = f"{cdp_url}/json/version"
+    for attempt in range(num_attempts):
+        try:
+            with urllib.request.urlopen(version_url, timeout=5) as response:
+                version_data = json.loads(response.read().decode())
+                websocket_url = version_data.get("webSocketDebuggerUrl")
+                if websocket_url:
+                    return websocket_url
+        except Exception:
+            pass
+        if attempt < num_attempts - 1:
+            await asyncio.sleep(2)
+    return None
+
+
+async def check_cdp_websocket() -> bool:
     """Check for the availability of remote Chrome with active CDP"""
     try:
-        print(f"{ARROW} Checking for remote Chrome with CDP at {CYAN}{CDP_URL}{NORMAL}...")
-        cdp = urllib.parse.urlparse(CDP_URL)
-        with urllib.request.urlopen(f"{cdp.scheme}://{cdp.netloc}/json") as response:
-            data = json.loads(response.read().decode())
-            result = isinstance(data, list) and len(data) > 0
-            if result:
-                print(f"{CHECK} CDP is detected.")
-            return result
+        print(f"{ARROW} Checking for remote Chrome with CDP at {CYAN}{CDP_WEBSOCKET_URL}{NORMAL}...")
+        if not CDP_WEBSOCKET_URL:
+            return False
+        async with websockets.connect(CDP_WEBSOCKET_URL, close_timeout=1):
+            pass
+        return True
     except Exception:
         return False
 
 
 async def launch_chromefleet_browser() -> bool:
-    global CDP_URL
+    global CDP_WEBSOCKET_URL
     try:
         browser_id = nanoid.generate(FRIENDLY_CHARS, 5)
         print(f"{ARROW} Launching Chromium via Chrome Fleet API at {CYAN}{CHROMEFLEET_URL}{NORMAL}...")
@@ -983,23 +1042,15 @@ async def launch_chromefleet_browser() -> bool:
                 return False
 
             CDP_URL = data["cdp_url"]
-            print(f"{CHECK} Chrome Fleet launched Chromium at {CYAN}{CDP_URL}{NORMAL}")
+            print(f"{CHECK} CDP URL with HTTP is {CYAN}{CDP_URL}{NORMAL}")
 
-            print(f"{ARROW} Checking CDP availability...")
-            await asyncio.sleep(3)
-            num_attempts = 20
-            for attempt in range(num_attempts):
-                if await check_cdp():
-                    print(f"{CHECK} Chrome Fleet Chromium CDP is ready")
-                    return True
+            CDP_WEBSOCKET_URL = await get_cdp_websocket_url(CDP_URL)
+            if not CDP_WEBSOCKET_URL:
+                print(f"{CROSS} Failed to get webSocketDebuggerUrl from {CDP_URL}/json/version")
+                return False
 
-                if attempt == num_attempts - 1:
-                    print(f"{CROSS} Failed to connect to CDP after Chrome Fleet launch")
-                    return False
-
-                await asyncio.sleep(2)
-
-            return False
+            print(f"{CHECK} Chrome Fleet launched Chromium at {CYAN}{CDP_WEBSOCKET_URL}{NORMAL}")
+            return True
 
     except urllib.error.HTTPError as e:
         print(f"{CROSS} Chrome Fleet API request failed: {e.code} {e.reason}")
@@ -1010,7 +1061,7 @@ async def launch_chromefleet_browser() -> bool:
 
 
 if __name__ == "__main__":
-    if asyncio.run(check_cdp()) is False:
+    if asyncio.run(check_cdp_websocket()) is False:
         print(f"{CROSS} No existing CDP found")
         if CHROMEFLEET_URL:
             if asyncio.run(launch_chromefleet_browser()) is False:
