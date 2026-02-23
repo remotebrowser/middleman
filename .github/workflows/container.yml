@@ -24,7 +24,13 @@ jobs:
         run: while ! curl -s 'http://127.0.0.1:9222/json/version' | grep -q 'Chrome'; do sleep 1; done
         timeout-minutes: 2
 
+      - name: Extract CDP WebSocket URL
+        id: cdp-url
+        run: echo "CDP_WEBSOCKET_URL=$(curl -s http://127.0.0.1:9222/json/version | jq -r '.webSocketDebuggerUrl')" >> $GITHUB_OUTPUT
+
       - run: uv run middleman.py &
+        env:
+          CDP_WEBSOCKET_URL: ${{ steps.cdp-url.outputs.CDP_WEBSOCKET_URL }}
 
       - name: Run the health check validation
         run: while ! curl -s 'http://localhost:3000/health' | grep 'OK'; do sleep 1; done
