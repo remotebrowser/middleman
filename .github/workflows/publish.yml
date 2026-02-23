@@ -30,7 +30,11 @@ jobs:
         run: while ! curl -s 'http://127.0.0.1:9222/json/version' | grep -q 'Chrome'; do sleep 1; done
         timeout-minutes: 2
 
-      - run: docker run -p 3000:3000 --name middleman --network middleman-net --env CDP_URL=http://$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}' cdp):9222 -d middleman
+      - name: Extract CDP WebSocket URL
+        id: cdp-url
+        run: echo "CDP_WEBSOCKET_URL=$(curl -s http://127.0.0.1:9222/json/version | jq -r '.webSocketDebuggerUrl' | sed 's/127.0.0.1/cdp/')" >> $GITHUB_OUTPUT
+
+      - run: docker run -p 3000:3000 --name middleman --network middleman-net --env CDP_WEBSOCKET_URL=${{ steps.cdp-url.outputs.CDP_WEBSOCKET_URL }} -d middleman
         timeout-minutes: 3
 
       - name: Run the health check validation
