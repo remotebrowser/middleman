@@ -994,23 +994,6 @@ async def main():
         parser.print_help()
 
 
-async def get_cdp_websocket_url(cdp_url: str, num_attempts: int = 20) -> str | None:
-    """Get CDP websocket URL from CDP URL by polling /json/version endpoint"""
-    version_url = f"{cdp_url}/json/version"
-    for attempt in range(num_attempts):
-        try:
-            with urllib.request.urlopen(version_url, timeout=5) as response:
-                version_data = json.loads(response.read().decode())
-                websocket_url = version_data.get("webSocketDebuggerUrl")
-                if websocket_url:
-                    return websocket_url
-        except Exception:
-            pass
-        if attempt < num_attempts - 1:
-            await asyncio.sleep(2)
-    return None
-
-
 async def check_cdp_websocket() -> bool:
     """Check for the availability of remote Chrome with active CDP"""
     try:
@@ -1026,6 +1009,7 @@ async def check_cdp_websocket() -> bool:
 
 async def launch_chromefleet_browser() -> bool:
     global CDP_WEBSOCKET_URL
+    assert CHROMEFLEET_URL is not None
     try:
         browser_id = nanoid.generate(FRIENDLY_CHARS, 5)
         print(f"{ARROW} Launching Chromium via Chrome Fleet API at {CYAN}{CHROMEFLEET_URL}{NORMAL}...")
@@ -1041,15 +1025,9 @@ async def launch_chromefleet_browser() -> bool:
                 print(f"{CROSS} Chrome Fleet API response missing cdp_url field")
                 return False
 
-            CDP_URL = data["cdp_url"]
-            print(f"{CHECK} CDP URL with HTTP is {CYAN}{CDP_URL}{NORMAL}")
-
-            CDP_WEBSOCKET_URL = await get_cdp_websocket_url(CDP_URL)
-            if not CDP_WEBSOCKET_URL:
-                print(f"{CROSS} Failed to get webSocketDebuggerUrl from {CDP_URL}/json/version")
-                return False
-
-            print(f"{CHECK} Chrome Fleet launched Chromium at {CYAN}{CDP_WEBSOCKET_URL}{NORMAL}")
+            cdp_base = CHROMEFLEET_URL.replace("https://", "wss://").replace("http://", "ws://")
+            CDP_WEBSOCKET_URL = f"{cdp_base}/cdp/{browser_id}"
+            print(f"{CHECK} Will use Chromium at {CYAN}{CDP_WEBSOCKET_URL}{NORMAL}")
             return True
 
     except urllib.error.HTTPError as e:
