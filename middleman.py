@@ -26,7 +26,6 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from zendriver.core.config import Config
 from zendriver.core.connection import Connection
 from zendriver.core import util
-from zendriver.core.browser import HTTPApi
 from zendriver.core._contradict import ContraDict
 
 CDP_WEBSOCKET_URL = os.getenv("CDP_WEBSOCKET_URL")
@@ -58,7 +57,7 @@ async def pause():
 async def create_browser_from_cdp_websocket(websocket_url: str, config: Config | None = None) -> zd.Browser:
     parsed = urllib.parse.urlparse(websocket_url)
     host = parsed.hostname or "127.0.0.1"
-    port = parsed.port or 9222
+    port = parsed.port or (443 if parsed.scheme in ("wss", "https") else 80)
 
     if not config:
         config = Config(host=host, port=port)
@@ -67,13 +66,7 @@ async def create_browser_from_cdp_websocket(websocket_url: str, config: Config |
     config.port = port
 
     instance = zd.Browser(config)
-    instance._http = HTTPApi((host, port))
-
-    try:
-        instance.info = ContraDict(await instance._http.get("version"), silent=True)
-    except Exception:
-        instance.info = ContraDict({"webSocketDebuggerUrl": websocket_url}, silent=True)
-
+    instance.info = ContraDict({"webSocketDebuggerUrl": websocket_url}, silent=True)
     instance.connection = Connection(websocket_url, _owner=instance)
 
     if instance.config.autodiscover_targets:
