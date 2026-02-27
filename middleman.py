@@ -1019,10 +1019,8 @@ async def launch_chromefleet_browser() -> bool:
         request = urllib.request.Request(request_url, method="POST")
 
         with urllib.request.urlopen(request) as response:
-            data = json.loads(response.read().decode())
-
-            if "cdp_url" not in data:
-                print(f"{CROSS} Chrome Fleet API response missing cdp_url field")
+            if response.status != 200:
+                print(f"{CROSS} Chrome Fleet API response is not valid")
                 return False
 
             cdp_base = CHROMEFLEET_URL.replace("https://", "wss://").replace("http://", "ws://")
