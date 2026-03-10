@@ -6,11 +6,13 @@ import json
 import os
 import random
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime
 from glob import glob
 
 import asyncio_atexit
@@ -652,12 +654,30 @@ async def finalize(id: str):
             print(f"Warning: Could not close page cleanly for {id}: {e}")
 
 
+def get_git_revision() -> str:
+    """Get the current git commit hash."""
+    git_rev = os.getenv("GIT_REV")
+    if git_rev:
+        return git_rev
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return "unknown"
+
+
 app = FastAPI()
 
 
 @app.get("/health")
-async def health() -> dict[str, float | str]:
-    return {"status": "OK", "timestamp": asyncio.get_event_loop().time()}
+async def health() -> str:
+    git_rev = get_git_revision()[:10]
+    return f"OK {int(datetime.now().timestamp())} GIT_REV: {git_rev}"
 
 
 @app.get("/", response_class=HTMLResponse)
