@@ -1,0 +1,46 @@
+name: Test with Chrome Fleet
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Download and extract latest Chrome Fleet release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url=$(gh api repos/remotebrowser/chromefleet/releases/latest \
+            --jq '.assets[] | select(.name | endswith("linux-64bit.zip")) | .browser_download_url')
+          curl -fsSL -o release.zip "$url"
+          unzip release.zip -d app
+          chmod +x app/chromefleet/chromefleet
+
+      - run: app/chromefleet/chromefleet &
+
+      - name: Wait until Chrome Fleet is ready
+        run: while ! curl -s 'http://localhost:8300/health' | grep 'OK'; do sleep 1; done
+        timeout-minutes: 3
+
+      - run: uv run middleman.py 2>&1 | tee middleman.log &
+        env:
+          CHROMEFLEET_URL: http://127.0.0.1:8300
+
+      - name: Run the health check validation
+        run: while ! curl -s 'http://localhost:3000/health' | grep 'OK'; do sleep 1; done
+        timeout-minutes: 3
+
+      - name: Display Middleman log
+        if: always()
+        run: cat middleman.log
