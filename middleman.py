@@ -537,47 +537,72 @@ def extract_value(item: Tag, attribute: str | None = None) -> str:
     return item.get_text(strip=True)
 
 
-async def convert(distilled: str):
+async def convert(distilled: str, pattern_path: str | None = None):
     document = parse(distilled)
-    snippet = document.find("script", {"type": "application/json"})
-    if snippet:
-        print(f"{GREEN}{ARROW} Found a data converter.{NORMAL}")
-        if MIDDLEMAN_DEBUG:
-            print(snippet.get_text())
-        try:
-            converter = json.loads(snippet.get_text())
+    converter = None
+
+    if pattern_path:
+        stops = document.find_all(attrs={"gg-stop": True})
+        for stop in stops:
+            if isinstance(stop, Tag):
+                gg_convert = stop.get("gg-convert")
+                if isinstance(gg_convert, str) and gg_convert.strip():
+                    pattern_dir = os.path.dirname(pattern_path)
+                    json_path = os.path.join(pattern_dir, gg_convert.strip())
+                    print(f"{GREEN}{ARROW} Loading converter from gg-convert: {json_path}{NORMAL}")
+                    try:
+                        with open(json_path, "r", encoding="utf-8") as f:
+                            converter = json.load(f)
+                        print(f"{GREEN}{ARROW} Loaded converter from {json_path}{NORMAL}")
+                        break
+                    except Exception as error:
+                        print(f"{RED}Failed to load converter from {json_path}: {error}{NORMAL}")
+
+    if converter is None:
+        snippet = document.find("script", {"type": "application/json"})
+        if snippet:
+            print(f"{GREEN}{ARROW} Found a data converter.{NORMAL}")
             if MIDDLEMAN_DEBUG:
-                print("Start converting using", converter)
+                print(snippet.get_text())
+            try:
+                converter = json.loads(snippet.get_text())
+            except Exception as error:
+                print(f"{RED}Conversion error:{NORMAL}", str(error))
+                return None
 
-            rows = document.select(str(converter.get("rows", "")))
-            print(f"  Finding rows using {CYAN}{converter.get('rows')}{NORMAL}: found {GREEN}{len(rows)}{NORMAL}.")
-            converted = []
-            for i, el in enumerate(rows):
-                if MIDDLEMAN_DEBUG:
-                    print(f" Converting row {GREEN}{i + 1}{NORMAL} of {len(rows)}")
-                kv: dict[str, str | list[str]] = {}
-                for col in converter.get("columns", []):
-                    name = col.get("name")
-                    selector = col.get("selector")
-                    attribute = col.get("attribute")
-                    kind = col.get("kind")
-                    if not name or not selector:
-                        continue
+    if converter is None:
+        return None
 
-                    if kind == "list":
-                        items = el.select(str(selector))
-                        kv[name] = [extract_value(item, attribute) for item in items]
-                        continue
+    if MIDDLEMAN_DEBUG:
+        print("Start converting using", converter)
 
-                    item = el.select_one(str(selector))
-                    if item:
-                        kv[name] = extract_value(item, attribute)
-                if len(kv.keys()) > 0:
-                    converted.append(kv)
-            print(f"{GREEN}{CHECK} Conversion done for {GREEN}{len(converted)}{NORMAL} entries.")
-            return converted
-        except Exception as error:
-            print(f"{RED}Conversion error:{NORMAL}", str(error))
+    rows = document.select(str(converter.get("rows", "")))
+    print(f"  Finding rows using {CYAN}{converter.get('rows')}{NORMAL}: found {GREEN}{len(rows)}{NORMAL}.")
+    converted = []
+    for i, el in enumerate(rows):
+        if MIDDLEMAN_DEBUG:
+            print(f" Converting row {GREEN}{i + 1}{NORMAL} of {len(rows)}")
+        kv: dict[str, str | list[str]] = {}
+        for col in converter.get("columns", []):
+            name = col.get("name")
+            selector = col.get("selector")
+            attribute = col.get("attribute")
+            kind = col.get("kind")
+            if not name or not selector:
+                continue
+
+            if kind == "list":
+                items = el.select(str(selector))
+                kv[name] = [extract_value(item, attribute) for item in items]
+                continue
+
+            item = el.select_one(str(selector))
+            if item:
+                kv[name] = extract_value(item, attribute)
+        if len(kv.keys()) > 0:
+            converted.append(kv)
+    print(f"{GREEN}{CHECK} Conversion done for {GREEN}{len(converted)}{NORMAL} entries.")
+    return converted
 
 
 def render(content: str, options: dict[str, str] | None = None) -> str:
@@ -778,7 +803,7 @@ async def link(id: str, request: Request):
 
         if await terminate(distilled):
             await finalize(id)
-            converted = await convert(distilled)
+            converted = await convert(distilled, pattern_path=match.name)
             if converted:
                 return JSONResponse(converted)
             return HTMLResponse(render(str(document.find("body")), {"title": title, "action": action}))
@@ -887,7 +912,7 @@ async def distill_command(location: str, option: str | None = None):
         print()
         if await terminate(distilled):
             print(f"{GREEN}{CHECK} Finished!{NORMAL}")
-            converted = await convert(distilled)
+            converted = await convert(distilled, pattern_path=match.name)
             if converted:
                 print()
                 print(converted)
@@ -936,7 +961,7 @@ async def run_command(location: str):
                     print(distilled)
 
                     if await terminate(distilled):
-                        converted = await convert(distilled)
+                        converted = await convert(distilled, pattern_path=match.name)
                         if converted:
                             print()
                             print(converted)
