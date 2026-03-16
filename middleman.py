@@ -69,11 +69,28 @@ async def create_browser_from_cdp_websocket(websocket_url: str, config: Config |
     instance.info = ContraDict({"webSocketDebuggerUrl": websocket_url}, silent=True)
     instance.connection = Connection(websocket_url, _owner=instance)
 
+    async def safe_handle_target_update(
+        event: zd.cdp.target.TargetInfoChanged
+        | zd.cdp.target.TargetDestroyed
+        | zd.cdp.target.TargetCreated
+        | zd.cdp.target.TargetCrashed,
+    ) -> None:
+        try:
+            await instance._handle_target_update(event)
+        except RuntimeError as exc:
+            # zendriver may raise "coroutine raised StopIteration" for
+            # out-of-order target lifecycle events in remote CDP sessions.
+            if "StopIteration" in str(exc):
+                return
+            raise
+        except StopIteration:
+            pass
+
     if instance.config.autodiscover_targets:
-        instance.connection.handlers[zd.cdp.target.TargetInfoChanged] = [instance._handle_target_update]
-        instance.connection.handlers[zd.cdp.target.TargetCreated] = [instance._handle_target_update]
-        instance.connection.handlers[zd.cdp.target.TargetDestroyed] = [instance._handle_target_update]
-        instance.connection.handlers[zd.cdp.target.TargetCrashed] = [instance._handle_target_update]
+        instance.connection.handlers[zd.cdp.target.TargetInfoChanged] = [safe_handle_target_update]
+        instance.connection.handlers[zd.cdp.target.TargetCreated] = [safe_handle_target_update]
+        instance.connection.handlers[zd.cdp.target.TargetDestroyed] = [safe_handle_target_update]
+        instance.connection.handlers[zd.cdp.target.TargetCrashed] = [safe_handle_target_update]
         await instance.connection.send(zd.cdp.target.set_discover_targets(discover=True))
 
     await instance.update_targets()
