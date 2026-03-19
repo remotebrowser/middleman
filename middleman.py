@@ -1064,8 +1064,6 @@ async def link(id: str, request: Request):
                 return JSONResponse(converted)
             return HTMLResponse(render(str(document.find("body")), {"title": title, "action": action}))
 
-
-
         if fields.get("button"):
             button = document.find("button", value=str(fields.get("button")))
             if button and isinstance(button, Tag):
@@ -1102,13 +1100,11 @@ async def link(id: str, request: Request):
                         names.append(str(name))
                         print(f"{CYAN}{ARROW} Status of checkbox {BOLD}{name}={checked}{NORMAL}")
                         if checked:
-                            pending_actions.append(
-                                {
-                                    "key": f"checkbox:{name}:{len(pending_actions)}",
-                                    "kind": "click",
-                                    "selector": str(selector),
-                                }
-                            )
+                            pending_actions.append({
+                                "key": f"checkbox:{name}:{len(pending_actions)}",
+                                "kind": "click",
+                                "selector": str(selector),
+                            })
                     elif input.get("type") == "radio":
                         value = fields.get(str(name)) if name else None
                         if not value or len(str(value)) == 0:
@@ -1121,13 +1117,11 @@ async def link(id: str, request: Request):
                         print(f"{CYAN}{ARROW} Handling radio button group {BOLD}{name}{NORMAL}")
                         print(f"{CYAN}{ARROW} Using form data {BOLD}{name}={value}{NORMAL}")
                         radio_selector, _ = get_selector(str(radio.get("gg-match")))
-                        pending_actions.append(
-                            {
-                                "key": f"radio:{value}:{len(pending_actions)}",
-                                "kind": "click",
-                                "selector": str(radio_selector),
-                            }
-                        )
+                        pending_actions.append({
+                            "key": f"radio:{value}:{len(pending_actions)}",
+                            "kind": "click",
+                            "selector": str(radio_selector),
+                        })
                         radio["checked"] = "checked"
                         current["distilled"] = str(document)
                         names.append(str(input.get("id")) if input.get("id") else "radio")
@@ -1138,14 +1132,12 @@ async def link(id: str, request: Request):
                             names.append(str(name))
                             input["value"] = str(value)
                             current["distilled"] = str(document)
-                            pending_actions.append(
-                                {
-                                    "key": f"set:{name}:{len(pending_actions)}",
-                                    "kind": "set_value",
-                                    "selector": str(selector),
-                                    "value": str(value),
-                                }
-                            )
+                            pending_actions.append({
+                                "key": f"set:{name}:{len(pending_actions)}",
+                                "kind": "set_value",
+                                "selector": str(selector),
+                                "value": str(value),
+                            })
                             del fields[str(name)]
                         else:
                             print(f"{CROSS}{RED} No form data found for {BOLD}{name}{NORMAL}")
