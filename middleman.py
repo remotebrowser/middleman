@@ -304,6 +304,103 @@ async def page_batch_extract(page: zd.Tab, queries: list[dict[str, object]]) -> 
     return None
 
 
+async def page_batch_actions(page: zd.Tab, actions: list[dict[str, str]]) -> dict[str, bool] | None:
+    if len(actions) == 0:
+        return {}
+
+    payload = json.dumps(actions)
+    js_code = f"""
+    (() => {{
+        const actions = {payload};
+        const output = {{}};
+
+        function findCss(selector, doc) {{
+            try {{
+                const direct = doc.querySelector(selector);
+                if (direct) return direct;
+            }} catch (error) {{
+                return null;
+            }}
+
+            const iframes = doc.querySelectorAll("iframe");
+            for (const iframe of iframes) {{
+                try {{
+                    const childDoc = iframe.contentDocument || iframe.contentWindow.document;
+                    const nested = findCss(selector, childDoc);
+                    if (nested) return nested;
+                }} catch (error) {{
+                    // Cross-origin iframe.
+                }}
+            }}
+            return null;
+        }}
+
+        for (const action of actions) {{
+            const key = action?.key;
+            const kind = action?.kind;
+            const selector = action?.selector;
+            if (typeof key !== "string" || key.length === 0) {{
+                continue;
+            }}
+            if (typeof selector !== "string" || selector.length === 0) {{
+                output[key] = false;
+                continue;
+            }}
+
+            let element = null;
+            if (selector.startsWith("//")) {{
+                try {{
+                    element = document.evaluate(
+                        selector,
+                        document,
+                        null,
+                        XPathResult.FIRST_ORDERED_NODE_TYPE,
+                        null
+                    ).singleNodeValue;
+                }} catch (error) {{
+                    element = null;
+                }}
+            }} else {{
+                element = findCss(selector, document);
+            }}
+
+            if (!element) {{
+                output[key] = false;
+                continue;
+            }}
+
+            try {{
+                if (kind === "click") {{
+                    element.click();
+                    output[key] = true;
+                }} else if (kind === "set_value") {{
+                    const value = typeof action?.value === "string" ? action.value : "";
+                    element.value = value;
+                    element.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                    element.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                    output[key] = true;
+                }} else {{
+                    output[key] = false;
+                }}
+            }} catch (error) {{
+                output[key] = false;
+            }}
+        }}
+
+        return output;
+    }})()
+    """
+
+    try:
+        result = await page.evaluate(js_code)
+        if isinstance(result, dict):
+            return {str(k): bool(v) for k, v in result.items()}
+    except Exception as error:
+        if MIDDLEMAN_DEBUG:
+            print(f"{YELLOW}Batch actions failed: {error}{NORMAL}")
+    return None
+
+
 async def distill(hostname: str | None, page, patterns: list[Pattern]) -> Match | None:
     result: list[Match] = []
 
@@ -967,26 +1064,35 @@ async def link(id: str, request: Request):
                 return JSONResponse(converted)
             return HTMLResponse(render(str(document.find("body")), {"title": title, "action": action}))
 
+
+
         if fields.get("button"):
             button = document.find("button", value=str(fields.get("button")))
             if button and isinstance(button, Tag):
                 button_selector, _ = get_selector(str(button.get("gg-match")))
-                button_element = await page_query_selector(page, str(button_selector))
-                if button_element:
-                    print(f"{CYAN}{ARROW} Clicking button {BOLD}{button_selector}{NORMAL}")
-                    await button_element.click()
+                batch_click = await page_batch_actions(
+                    page,
+                    [{"key": "button", "kind": "click", "selector": str(button_selector)}],
+                )
+                if batch_click and batch_click.get("button", False):
+                    print(f"{CYAN}{ARROW} Clicking button {BOLD}{button_selector}{NORMAL} (batch)")
+                else:
+                    button_element = await page_query_selector(page, str(button_selector))
+                    if button_element:
+                        print(f"{CYAN}{ARROW} Clicking button {BOLD}{button_selector}{NORMAL}")
+                        await button_element.click()
                 continue
 
         names: list[str] = []
         inputs = document.find_all("input")
+        pending_actions: list[dict[str, str]] = []
 
         for input in inputs:
             if isinstance(input, Tag):
                 selector, _ = get_selector(str(input.get("gg-match")))
-                element = await page_query_selector(page, selector)
                 name = input.get("name")
 
-                if selector and element:
+                if selector:
                     if input.get("type") == "checkbox":
                         if not name:
                             print(f"{CROSS}{RED} No name for the checkbox {NORMAL}{selector}")
@@ -996,7 +1102,13 @@ async def link(id: str, request: Request):
                         names.append(str(name))
                         print(f"{CYAN}{ARROW} Status of checkbox {BOLD}{name}={checked}{NORMAL}")
                         if checked:
-                            await element.click()
+                            pending_actions.append(
+                                {
+                                    "key": f"checkbox:{name}:{len(pending_actions)}",
+                                    "kind": "click",
+                                    "selector": str(selector),
+                                }
+                            )
                     elif input.get("type") == "radio":
                         value = fields.get(str(name)) if name else None
                         if not value or len(str(value)) == 0:
@@ -1009,13 +1121,16 @@ async def link(id: str, request: Request):
                         print(f"{CYAN}{ARROW} Handling radio button group {BOLD}{name}{NORMAL}")
                         print(f"{CYAN}{ARROW} Using form data {BOLD}{name}={value}{NORMAL}")
                         radio_selector, _ = get_selector(str(radio.get("gg-match")))
-                        radio_element = await page_query_selector(page, str(radio_selector))
-                        if radio_element:
-                            await radio_element.click()
+                        pending_actions.append(
+                            {
+                                "key": f"radio:{value}:{len(pending_actions)}",
+                                "kind": "click",
+                                "selector": str(radio_selector),
+                            }
+                        )
                         radio["checked"] = "checked"
                         current["distilled"] = str(document)
                         names.append(str(input.get("id")) if input.get("id") else "radio")
-                        await asyncio.sleep(0.25)
                     elif name:
                         value = fields.get(str(name))
                         if value and len(str(value)) > 0:
@@ -1023,11 +1138,42 @@ async def link(id: str, request: Request):
                             names.append(str(name))
                             input["value"] = str(value)
                             current["distilled"] = str(document)
-                            await element.type_text(str(value))
+                            pending_actions.append(
+                                {
+                                    "key": f"set:{name}:{len(pending_actions)}",
+                                    "kind": "set_value",
+                                    "selector": str(selector),
+                                    "value": str(value),
+                                }
+                            )
                             del fields[str(name)]
-                            await asyncio.sleep(0.25)
                         else:
                             print(f"{CROSS}{RED} No form data found for {BOLD}{name}{NORMAL}")
+
+        if len(pending_actions) > 0:
+            action_results = await page_batch_actions(page, pending_actions)
+            results = action_results if isinstance(action_results, dict) else {}
+
+            # Fallback for failed/unexecuted actions to preserve behavior.
+            for action in pending_actions:
+                key = action.get("key")
+                kind = action.get("kind")
+                selector = action.get("selector")
+                if not isinstance(key, str) or not isinstance(kind, str) or not isinstance(selector, str):
+                    continue
+                if results.get(key, False):
+                    continue
+
+                element = await page_query_selector(page, selector)
+                if not element:
+                    continue
+                if kind == "click":
+                    await element.click()
+                elif kind == "set_value":
+                    value = action.get("value")
+                    await element.type_text(value if isinstance(value, str) else "")
+
+            await asyncio.sleep(0.25)
 
         await autoclick(page, distilled, "[gg-autoclick]:not(button)")
 
