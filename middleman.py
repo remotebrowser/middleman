@@ -202,6 +202,108 @@ class Match:
     distilled: str
 
 
+async def page_batch_extract(page: zd.Tab, queries: list[dict[str, object]]) -> dict[str, dict[str, object]] | None:
+    if len(queries) == 0:
+        return {}
+
+    payload = json.dumps(queries)
+    js_code = f"""
+    (() => {{
+        const queries = {payload};
+        const output = {{}};
+
+        function findCss(selector, doc) {{
+            try {{
+                const direct = doc.querySelector(selector);
+                if (direct) return direct;
+            }} catch (error) {{
+                return null;
+            }}
+
+            const iframes = doc.querySelectorAll("iframe");
+            for (const iframe of iframes) {{
+                try {{
+                    const childDoc = iframe.contentDocument || iframe.contentWindow.document;
+                    const nested = findCss(selector, childDoc);
+                    if (nested) return nested;
+                }} catch (error) {{
+                    // Cross-origin iframe.
+                }}
+            }}
+
+            return null;
+        }}
+
+        for (const query of queries) {{
+            const selector = query?.selector;
+            const queryKey = query?.query_key;
+            if (typeof selector !== "string" || selector.length === 0) {{
+                continue;
+            }}
+            if (typeof queryKey !== "string" || queryKey.length === 0) {{
+                continue;
+            }}
+
+            let element = null;
+
+            if (selector.startsWith("//")) {{
+                try {{
+                    element = document.evaluate(
+                        selector,
+                        document,
+                        null,
+                        XPathResult.FIRST_ORDERED_NODE_TYPE,
+                        null
+                    ).singleNodeValue;
+                }} catch (error) {{
+                    element = null;
+                }}
+            }} else {{
+                element = findCss(selector, document);
+            }}
+
+            if (!element) {{
+                output[queryKey] = {{ found: false }};
+                continue;
+            }}
+
+            const tag = String(element.tagName || "").toLowerCase();
+            const item = {{ found: true, tag }};
+
+            if (query?.wants_html) {{
+                item.html = element.innerHTML || "";
+            }}
+            if (query?.wants_text) {{
+                item.text = element.innerText || "";
+            }}
+            if (query?.wants_value && ["input", "textarea", "select"].includes(tag)) {{
+                const value = element.value;
+                if (typeof value === "string") {{
+                    item.value = value;
+                }} else if (value == null) {{
+                    item.value = "";
+                }} else {{
+                    item.value = String(value);
+                }}
+            }}
+
+            output[queryKey] = item;
+        }}
+
+        return output;
+    }})()
+    """
+
+    try:
+        result = await page.evaluate(js_code)
+        if isinstance(result, dict):
+            return result
+    except Exception as error:
+        if MIDDLEMAN_DEBUG:
+            print(f"{YELLOW}Batch extract failed: {error}{NORMAL}")
+    return None
+
+
 async def distill(hostname: str | None, page, patterns: list[Pattern]) -> Match | None:
     result: list[Match] = []
 
@@ -226,9 +328,9 @@ async def distill(hostname: str | None, page, patterns: list[Pattern]) -> Match 
 
         print(f"Checking {name} with priority {priority}")
 
-        found = True
-        match_count = 0
         targets = pattern.find_all(attrs={"gg-match": True}) + pattern.find_all(attrs={"gg-match-html": True})
+        target_specs: list[dict[str, object]] = []
+        batch_queries: list[dict[str, object]] = []
 
         for target in targets:
             if not isinstance(target, Tag):
@@ -236,36 +338,76 @@ async def distill(hostname: str | None, page, patterns: list[Pattern]) -> Match 
 
             if MIDDLEMAN_DEBUG:
                 print(f"Checking target = {target}")
-            html = target.get("gg-match-html")
-            selector, _ = get_selector(str(html if html else target.get("gg-match")))
+
+            html_attr = target.get("gg-match-html")
+            selector, _ = get_selector(str(html_attr if html_attr else target.get("gg-match")))
             if not selector or not isinstance(selector, str):
                 continue
 
-            print(f"Find selector {selector}")
-            source = await page_query_selector(page, selector)
-            if source:
-                print(f"{GREEN}Selector {selector} is source {source}{NORMAL}")
+            is_html = html_attr is not None
+            query_key = str(len(target_specs))
+            optional = target.get("gg-optional") is not None
+
+            target_specs.append({
+                "target": target,
+                "selector": selector,
+                "html": is_html,
+                "optional": optional,
+                "query_key": query_key,
+            })
+            batch_queries.append({
+                "query_key": query_key,
+                "selector": selector,
+                "wants_html": is_html,
+                "wants_text": not is_html,
+                "wants_value": not is_html,
+            })
+
+        found = True
+        match_count = 0
+
+        batch_results = await page_batch_extract(page, batch_queries)
+        safe_results = batch_results if isinstance(batch_results, dict) else {}
+
+        for spec in target_specs:
+            target = spec.get("target")
+            selector = spec.get("selector")
+            query_key = spec.get("query_key")
+            html = bool(spec.get("html"))
+            optional = bool(spec.get("optional"))
+
+            if not isinstance(target, Tag):
+                continue
+            if not isinstance(selector, str) or not isinstance(query_key, str):
+                continue
+
+            source = safe_results.get(query_key, {})
+            source_found = bool(source.get("found")) if isinstance(source, dict) else False
+
+            if source_found:
                 if html:
                     target.clear()
-                    fragment = BeautifulSoup("<div>" + await source.inner_html() + "</div>", "html.parser")
+                    html_content = source.get("html", "") if isinstance(source, dict) else ""
+                    fragment = BeautifulSoup("<div>" + str(html_content) + "</div>", "html.parser")
                     if fragment.div:
                         for child in list(fragment.div.children):
                             child.extract()
                             target.append(child)
                 else:
-                    raw_text = await source.inner_text()
-                    if raw_text:
+                    raw_text = source.get("text") if isinstance(source, dict) else None
+                    if isinstance(raw_text, str) and raw_text:
                         target.string = raw_text.strip()
-                    if source.tag in ["input", "textarea", "select"]:
-                        target["value"] = source.element.value or ""
+                    tag = str(source.get("tag", "")).lower() if isinstance(source, dict) else ""
+                    if tag in ["input", "textarea", "select"]:
+                        value = source.get("value", "") if isinstance(source, dict) else ""
+                        target["value"] = value if isinstance(value, str) else ""
                 match_count += 1
-            else:
-                print(f"{RED}Selector {selector} has no match{NORMAL}")
-                optional = target.get("gg-optional") is not None
-                if MIDDLEMAN_DEBUG and optional:
-                    print(f"{GRAY}Optional {selector} has no match{NORMAL}")
-                if not optional:
-                    found = False
+                continue
+
+            if MIDDLEMAN_DEBUG and optional:
+                print(f"{GRAY}Optional {selector} has no match{NORMAL}")
+            if not optional:
+                found = False
 
         if found and match_count > 0:
             distilled = str(pattern)
